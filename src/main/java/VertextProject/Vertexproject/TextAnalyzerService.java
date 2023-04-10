@@ -13,111 +13,104 @@ import io.vertx.ext.web.handler.StaticHandler;
 import java.util.*;
 
 public class TextAnalyzerService extends AbstractVerticle {
+	
+	private static final int HTTP_PORT = 8080;
+	
 
-	private Map<String, Integer> wordCounts = new HashMap<>();
-	private List<String> words = new ArrayList<>();
+    @Override
+    public void start(Future<Void> future) {
+        Router router = Router.router(vertx);
 
-	@Override
-	public void start(Future<Void> startFuture) throws Exception {
+        // Enable reading the request body for all routes
+        router.route().handler(BodyHandler.create());
 
-		Router router = Router.router(vertx);
+        // Define the route for analyzing text
+        router.post("/analyze").handler(this::analyzeText);
 
-		router.route("/assets/*").handler(StaticHandler.create("assets"));
+        // Serve static files in the "public" directory
+        router.route().handler(StaticHandler.create("public"));
 
-		// POST requests
-		router.route().handler(BodyHandler.create());
+        // Create the HTTP server
+        vertx.createHttpServer()
+                .requestHandler(router)
+                .listen(HTTP_PORT, ar -> {
+                    if (ar.succeeded()) {
+                        System.out.println("Server started on port " + HTTP_PORT);
+                        future.complete();
+                    } else {
+                        System.out.println("Failed to start server: " + ar.cause());
+                        future.fail(ar.cause());
+                    }
+                });
+    }
 
-		// API routes
-		router.post("/analyze").handler(this::analyzeText);
+	private void analyzeText(RoutingContext context) {
+	    // Get the text from the request
+	    String text = context.getBodyAsJson().getString("text");
+	    String[] words = {"apple", "banana", "cherry", "date", "elderberry"};
 
-		// Code to start the server
-		vertx.createHttpServer().requestHandler(router).listen(8080, result -> {
-			if (result.succeeded()) {
-				startFuture.complete();
-			} else {
-				startFuture.fail(result.cause());
-			}
-		});
+	    // Convert the text to lowercase
+	    String lowercaseText = text.toLowerCase();
+
+	    // Find the closest matching word based on character value
+	    String closestValueWord = findClosestValueWord(lowercaseText, words);
+
+	    // Find the closest matching word based on lexical order
+	    String closestLexicalWord = findClosestLexicalWord(lowercaseText, words);
+
+	    // Return the response
+	    JsonObject response = new JsonObject();
+	    if (closestValueWord == null || closestLexicalWord == null) {
+	        // No words found to match against
+	        response.putNull("value");
+	        response.putNull("lexical");
+	    } else {
+	        response.put("value", closestValueWord);
+	        response.put("lexical", closestLexicalWord);
+	    }
+	    context.response().putHeader("content-type", "application/json").end(response.encode());
 	}
 
-	private String getClosestByValue(String text) {
-		String closestWord = null;
-		int closestValueDiff = Integer.MAX_VALUE;
-
+	private String findClosestValueWord(String text,String[] words) {
+	    String closestWord = null;
+	    int closestDistance = Integer.MAX_VALUE;
+	    int largestValue = 0;
+	    
 		for (String word : words) {
-			int valueDiff = Math.abs(getWordValue(word) - getWordValue(text));
-			if (valueDiff < closestValueDiff || (valueDiff == closestValueDiff && word.compareTo(closestWord) > 0)) {
-				closestValueDiff = valueDiff;
-				closestWord = word;
-			}
-		}
-
-		return closestWord;
+	        // Calculate the distance between the lowercaseText and the word based on character values
+	        int distance = Math.abs(getCharacterValue(text) - getCharacterValue(word.toLowerCase()));
+	        if (distance < closestDistance || (distance == closestDistance && getCharacterValue(word.toLowerCase()) > largestValue)) {
+	            closestDistance = distance;
+	            closestWord = word;
+	            largestValue = getCharacterValue(word.toLowerCase());
+	        }
+	    }
+	    return closestWord;
 	}
 
-	private String getClosestByLexical(String text) {
-		String closestWord = null;
-		int closestLexicalDiff = Integer.MAX_VALUE;
-
-		for (String word : words) {
-			int lexicalDiff = Math.abs(word.compareToIgnoreCase(text));
-			if (lexicalDiff < closestLexicalDiff
-					|| (lexicalDiff == closestLexicalDiff && word.compareTo(closestWord) < 0)) {
-				closestLexicalDiff = lexicalDiff;
-				closestWord = word;
-			}
-		}
-
-		return closestWord;
+	private String findClosestLexicalWord(String text, String[] words) {
+	    String closestWord = null;
+	    int closestDistance = Integer.MAX_VALUE;
+	    for (String word : words) {
+	        // Calculate the distance between the lowercaseText and the word based on lexical order
+	        int distance = Math.abs(text.compareToIgnoreCase(word));
+	        if (distance < closestDistance || (distance == closestDistance && word.compareTo(closestWord) < 0)) {
+	            closestDistance = distance;
+	            closestWord = word;
+	        }
+	    }
+	    return closestWord;
 	}
 
-	private int getWordValue(String word) {
-		int value = 0;
-		for (char c : word.toLowerCase().toCharArray()) {
-			value += c - 'a' + 1;
-		}
-		return value;
-	}
-
-	private void analyzeText(RoutingContext routingContext) {
-		JsonObject requestBody = routingContext.getBodyAsJson();
-		String text = requestBody.getString("text").toLowerCase();
-
-		updateWordCounts(text);
-
-		String closestByValue = getClosestByValue(text);
-		String closestByLexical = getClosestByLexical(text);
-
-		JsonObject responseBody = new JsonObject().put("value", closestByValue).put("lexical", closestByLexical);
-
-		HttpServerResponse response = routingContext.response();
-		response.putHeader("content-type", "application/json");
-		response.end(responseBody.encode());
-	}
-
-	private void updateWordCounts(String text) {
-
-		String[] words = text.split("\\s+");
-
-		for (String word : words) {
-			String cleanedWord = word.replaceAll("[^a-zA-Z]", "");
-
-			if (cleanedWord.isEmpty()) {
-				continue;
-			}
-
-			int count = wordCounts.getOrDefault(cleanedWord, 0);
-			wordCounts.put(cleanedWord, count + 1);
-
-			if (!this.words.contains(cleanedWord)) {
-				this.words.add(cleanedWord);
-			}
-		}
-	}
-
-	public static void main(String[] args) {
-		Vertx vertx = Vertx.vertx();
-		vertx.deployVerticle(new TextAnalyzerService());
+	private int getCharacterValue(String text) {
+	    int value = 0;
+	    for (int i = 0; i < text.length(); i++) {
+	        char c = text.charAt(i);
+	        if (Character.isLetter(c)) {
+	            value += Character.toLowerCase(c) - 'a' + 1;
+	        }
+	    }
+	    return value;
 	}
 
 }
